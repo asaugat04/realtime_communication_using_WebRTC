@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Video App</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <h3>Your Id: <span id="myId"></span></h3>
+    <h3>Online Users (click to connect)</h3>
+    <div id="users"></div>
+    <video id="local-video" autoplay muted playsinline></video>
+    <video id="remote-video" autoplay muted playsinline></video>
+    <p id="status"></p>
+
+    <!-- Import socket.io script -->
+    <script
+      src="https://cdn.socket.io/4.7.5/socket.io.min.js"
+      integrity="sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO"
+      crossorigin="anonymous"
+    ></script>
+
+    <script>
+      const socket = io();
+
+      const peer = new RTCPeerConnection({
+        iceServers: [
+          {
+            urls: "stun:stun.stunprotocol.org",
+          },
+        ],
+      });
+
+      const createCall = async (to) => {
+        const status = document.getElementById("status");
+        status.innerText = `Calling ${to}`;
+
+        const localOffer = await peer.createOffer();
+        await peer.setLocalDescription(new RTCSessionDescription(localOffer));
+
+        socket.emit("outgoing:call", { fromOffer: localOffer, to });
+      };
+
+      peer.ontrack = async ({ streams: [stream] }) => {
+        const status = document.getElementById("status");
+        status.innerText = "Incomming Stream";
+
+        console.log(stream);
+
+        const video = document.getElementById("remote-video");
+        video.srcObject = stream;
+        video.play();
+
+        const mySteam = await navigator.mediaDevices.getUserMedia({
+          video: true,
+        });
+
+        for (const track of mySteam.getTracks()) {
+          peer.addTrack(track, mySteam);
+        }
+      };
+
+      socket.on("users:joined", (id) => {
+        const usersDiv = document.getElementById("users");
+        const btn = document.createElement("button");
+        const textNode = document.createTextNode(id);
+
+        btn.id = id;
+
+        btn.setAttribute("onclick", `createCall('${id}')`);
+        btn.appendChild(textNode);
+        usersDiv.appendChild(btn);
+      });
+
+      socket.on("incomming:answere", async (data) => {
+        const status = document.getElementById("status");
+        status.innerText = "incomming:answere";
+
+        const { offer } = data;
+        await peer.setRemoteDescription(new RTCSessionDescription(offer));
+      });
+
+      socket.on("user:disconnect", (id) => {
+        document.getElementById(id).remove();
+      });
+
+      socket.on("incomming:call", async (data) => {
+        const status = document.getElementById("status");
+        status.innerText = "incomming:call";
+
+        const { from, offer } = data;
+
+        await peer.setRemoteDescription(new RTCSessionDescription(offer));
+
+        const answereOffer = await peer.createAnswer();
+        await peer.setLocalDescription(new RTCSessionDescription(answereOffer));
+
+        socket.emit("call:accepted", { answere: answereOffer, to: from });
+        const mySteam = await navigator.mediaDevices.getUserMedia({
+          video: true,
+        });
+
+        for (const track of mySteam.getTracks()) {
+          peer.addTrack(track, mySteam);
+        }
+      });
+
+      const getAndUpdateUsers = async () => {
+        const usersDiv = document.getElementById("users");
+        usersDiv.innerHTML = "";
+
+        const response = await fetch("/users", { method: "GET" });
+        const jsonResponse = await response.json();
+
+        console.log(jsonResponse);
+
+        jsonResponse.forEach((user) => {
+          const btn = document.createElement("button");
+          const textNode = document.createTextNode(user[0]);
+
+          btn.id = user[0];
+
+          btn.setAttribute("onclick", `createCall('${user[0]}')`);
+          btn.appendChild(textNode);
+          usersDiv.appendChild(btn);
+        });
+      };
+
+      socket.on(
+        "hello",
+        ({ id }) => (document.getElementById("myId").innerText = id)
+      );
+
+      async function getUserMedia() {
+        if (navigator.mediaDevices.getUserMedia === undefined) {
+          navigator.mediaDevices.getUserMedia = function (constraints) {
+            var getUserMedia =
+              navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+            if (!getUserMedia) {
+              return Promise.reject(
+                new Error("getUserMedia is not implemented in this browser")
+              );
+            }
+            return new Promise(function (resolve, reject) {
+              getUserMedia.call(navigator, constraints, resolve, reject);
+            });
+          };
+        } else {
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: "user" }, // 'user' for front camera, 'environment' for back camera
+            });
+            document.getElementById("local-video").srcObject = stream;
+            addLocalTracks(stream);
+          } catch (error) {
+            console.error("Error accessing the camera:", error);
+          }
+          if (navigator.mediaDevices === undefined) {
+            navigator.mediaDevices = {};
+          }
+        }
+      }
+
+      window.addEventListener("load", () => {
+        getUserMedia();
+        getAndUpdateUsers(); // Implement this function if not already done.
+      });
+    </script>
+  </body>
+</html>
