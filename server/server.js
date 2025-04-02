@@ -1,62 +1,96 @@
-const https = require("https"); // Import 'https' instead of 'http'
-const fs = require("fs");
+// server.js
 const express = require("express");
-const socketIo = require("socket.io");
+const http = require("http");
+const socket = require("socket.io");
 const path = require("path");
-const cors = require("cors");
 
-const options = {
-  key: fs.readFileSync("localhost+2-key.pem"),
-  cert: fs.readFileSync("localhost+2.pem"),
-};
-console.log(options);
+// Create Express app
 const app = express();
-const server = https.createServer(options, app); // Create an HTTPS server
-app.use(cors());
+const server = http.createServer(app);
+const io = socket(server);
 
-const io = socketIo(server); // Attach socket.io to the server
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, "public")));
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
 
-const PORT = process.env.PORT || 8000;
+// Map of active users
+const users = {};
 
-// Create a users map to keep track of users
-const users = new Map();
-
+// Socket.io connection handling
 io.on("connection", (socket) => {
   console.log(`User connected: ${socket.id}`);
-  users.set(socket.id, socket.id);
 
-  // Emit that a new user has joined as soon as someone joins
-  socket.broadcast.emit("users:joined", socket.id);
-  socket.emit("hello", { id: socket.id });
-
-  socket.on("outgoing:call", (data) => {
-    const { fromOffer, to } = data;
-    socket.to(to).emit("incoming:call", { from: socket.id, offer: fromOffer });
+  // Handle user joining
+  socket.on("register", (username) => {
+    console.log(`${username} registered`);
+    users[socket.id] = username;
+    // Notify all clients about active users
+    io.emit("active-users", getActiveUsers());
   });
 
-  socket.on("call:accepted", (data) => {
-    const { answer, to } = data;
-    socket.to(to).emit("incoming:answer", { from: socket.id, offer: answer });
+  // Handle call initiation
+  socket.on("call-user", (data) => {
+    console.log(`Call initiated from ${users[socket.id]} to ${users[data.to]}`);
+    io.to(data.to).emit("call-made", {
+      offer: data.offer,
+      from: socket.id,
+      username: users[socket.id],
+    });
   });
 
+  // Handle call answer
+  socket.on("make-answer", (data) => {
+    console.log(`Call answered by ${users[socket.id]} to ${users[data.to]}`);
+    io.to(data.to).emit("answer-made", {
+      answer: data.answer,
+      from: socket.id,
+    });
+  });
+
+  // Handle ICE candidates for WebRTC
+  socket.on("ice-candidate", (data) => {
+    io.to(data.to).emit("ice-candidate", {
+      candidate: data.candidate,
+      from: socket.id,
+    });
+  });
+
+  // Handle call rejection
+  socket.on("reject-call", (data) => {
+    io.to(data.from).emit("call-rejected", {
+      from: socket.id,
+    });
+  });
+
+  // Handle call ending
+  socket.on("end-call", (data) => {
+    io.to(data.to).emit("call-ended", {
+      from: socket.id,
+    });
+  });
+
+  // Handle disconnection
   socket.on("disconnect", () => {
-    console.log(`User disconnected: ${socket.id}`);
-    users.delete(socket.id);
-    socket.broadcast.emit("user:disconnect", socket.id);
+    console.log(`User disconnected: ${users[socket.id]}`);
+    delete users[socket.id];
+    // Notify all clients about active users
+    io.emit("active-users", getActiveUsers());
   });
 });
 
-app.use(express.static(path.resolve("./../client"))); // Check your directory path
+// Helper function to get list of active users
+function getActiveUsers() {
+  const activeUsers = [];
+  for (const [id, username] of Object.entries(users)) {
+    activeUsers.push({ id, username });
+  }
+  return activeUsers;
+}
 
-app.get("/users", (req, res) => {
-  return res.json(Array.from(users.keys())); // Ensure it returns an array of user IDs
-});
-
-app.get("/", (req, res) => {
-  // res.sendFile("./../client/index.html");
-  res.send("hello");
-});
-
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Listening on *:${PORT}`);
+// Start server
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });

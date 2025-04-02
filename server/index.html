@@ -221,7 +221,7 @@
 
     // Connect to socket server
     function connectToSocket(username) {
-      socket = io('http://localhost:3000',{
+      socket = io(window.location.href,{
         extraHeaders: {
       "Access-Control-Allow-Origin": "*"
     }
